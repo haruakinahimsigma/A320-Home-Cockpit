@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111820" />
+  <title>A320 Web Cockpit — Prototype</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #080c11; color: #e8edf2; overflow: hidden; }
+    #app { position: relative; width: 100vw; height: 100dvh; min-height: 440px; }
+    #view { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+    .hud { position: absolute; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
+    .topbar, .bottombar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .pill { background: #111a24e8; border: 1px solid #354454; border-radius: 8px; padding: 7px 10px; font-size: 12px; letter-spacing: .04em; }
+    .pill strong { color: #9fe8c0; font-weight: 700; }
+    .panel { pointer-events: auto; background: #101821f2; border: 1px solid #354454; border-radius: 12px; padding: 12px; width: min(290px, calc(100vw - 24px)); box-shadow: 0 12px 40px #0008; }
+    .panel h2 { font-size: 12px; letter-spacing: .12em; margin: 0 0 10px; color: #9fb4c7; }
+    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    button { min-height: 42px; border: 1px solid #43576b; border-radius: 8px; background: #1b2a38; color: #f1f6fa; font: inherit; font-size: 12px; padding: 8px; touch-action: manipulation; cursor: pointer; }
+    button[aria-pressed="true"] { background: #174c3a; border-color: #52c99a; color: #b6ffdf; }
+    .sliderrow { display: grid; grid-template-columns: 74px 1fr 38px; align-items: center; gap: 8px; font-size: 12px; margin: 10px 0; }
+    input[type="range"] { width: 100%; accent-color: #70d7aa; }
+    #hint { color: #b7c4d0; font-size: 11px; max-width: 460px; line-height: 1.5; }
+    #error { display: none; position: absolute; inset: 20% 8%; padding: 20px; background: #27161a; border: 1px solid #a34d5c; border-radius: 12px; z-index: 5; }
+    @media (max-width: 640px) { .panel { width: min(245px, calc(100vw - 24px)); padding: 9px; } button { min-height: 38px; } .pill { font-size: 10px; padding: 6px 8px; } #hint { max-width: 210px; } }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js" } }
+  </script>
+</head>
+<body>
+<div id="app">
+  <canvas id="view" aria-label="Interactive 3D A320 cockpit prototype"></canvas>
+  <div class="hud">
+    <div class="topbar">
+      <div class="pill">A320 WEB COCKPIT <strong>DEV BUILD</strong></div>
+      <div class="pill">SIM <strong id="simstate">PAUSED</strong></div>
+      <div class="pill">CAM <strong>CAPT</strong></div>
+    </div>
+    <div class="bottombar">
+      <section class="panel" aria-label="Flight controls">
+        <h2>FLIGHT CONTROLS · PROTOTYPE</h2>
+        <div class="controls">
+          <button id="power" aria-pressed="false">BAT 1 + 2</button>
+          <button id="engines" aria-pressed="false">ENG START</button>
+          <button id="ap" aria-pressed="false">AUTOPILOT</button>
+          <button id="gear" aria-pressed="true">GEAR DOWN</button>
+        </div>
+        <div class="sliderrow"><label for="throttle">THRUST</label><input id="throttle" type="range" min="0" max="100" value="0"><output id="throttleVal">0%</output></div>
+        <div class="sliderrow"><label for="pitch">PITCH</label><input id="pitch" type="range" min="-20" max="20" value="0"><output id="pitchVal">0°</output></div>
+        <div class="sliderrow"><label for="roll">ROLL</label><input id="roll" type="range" min="-35" max="35" value="0"><output id="rollVal">0°</output></div>
+      </section>
+      <div id="hint">Drag to look around · use sliders to control the prototype aircraft attitude. This is an early visual/systems scaffold, not a certified or procedurally accurate flight simulator.</div>
+    </div>
+  </div>
+  <div id="error"><h2>3D renderer could not start</h2><p>Check that this browser supports WebGL 2 and can load the Three.js module from the CDN.</p></div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+
+const canvas = document.querySelector('#view');
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+} catch (e) {
+  document.querySelector('#error').style.display = 'block';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = false;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8aa8bf);
+scene.fog = new THREE.Fog(0x8aa8bf, 14, 42);
+const camera = new THREE.PerspectiveCamera(67, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 1.65, 4.7);
+const cockpit = new THREE.Group();
+scene.add(cockpit);
+
+scene.add(new THREE.HemisphereLight(0xdcecff, 0x252c36, 2.0));
+const key = new THREE.DirectionalLight(0xffffff, 2.2);
+key.position.set(-4, 8, 5);
+scene.add(key);
+
+const mat = (color, roughness=0.75, metalness=0.12) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
+const shell = mat(0x343d46), edge = mat(0x151b21), panelMat = mat(0x202830), screenMat = mat(0x061b1c, 0.5, 0.1), buttonMat = mat(0x4b5660);
+function box(parent, name, size, pos, material, rot=[0,0,0]) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size), material);
+  mesh.name = name; mesh.position.set(...pos); mesh.rotation.set(...rot); parent.add(mesh); return mesh;
+}
+// Cockpit tub and side structures
+box(cockpit, 'floor', [5.5,0.18,5.4], [0,0.35,0.8], edge);
+box(cockpit, 'left side console', [0.28,0.75,3.2], [-2.1,0.8,0.7], shell, [0.05,0,0]);
+box(cockpit, 'right side console', [0.28,0.75,3.2], [2.1,0.8,0.7], shell, [0.05,0,0]);
+box(cockpit, 'main instrument brow', [4.6,0.25,0.65], [0,2.03,-0.65], edge, [-0.12,0,0]);
+box(cockpit, 'main instrument panel', [4.5,0.92,0.3], [0,1.45,-0.5], panelMat, [-0.16,0,0]);
+box(cockpit, 'glareshield', [4.8,0.18,0.72], [0,2.05,-0.02], shell, [-0.06,0,0]);
+// Forward windshield frame and glass-like panes
+const glass = new THREE.MeshStandardMaterial({ color: 0x68889d, roughness: 0.22, metalness: 0.05, transparent: true, opacity: 0.28, side: THREE.DoubleSide });
+box(cockpit, 'windshield center frame', [0.09,1.25,0.12], [0,2.8,-1.0], edge, [-0.15,0,0]);
+box(cockpit, 'windshield left frame', [0.1,1.3,0.12], [-1.55,2.78,-1.0], edge, [-0.15,0,-0.12]);
+box(cockpit, 'windshield right frame', [0.1,1.3,0.12], [1.55,2.78,-1.0], edge, [-0.15,0,0.12]);
+box(cockpit, 'windshield top', [3.25,0.1,0.12], [0,3.42,-1.0], edge);
+box(cockpit, 'left windshield glass', [1.48,1.2,0.035], [-0.78,2.82,-1.06], glass, [-0.15,0,-0.12]);
+box(cockpit, 'right windshield glass', [1.48,1.2,0.035], [0.78,2.82,-1.06], glass, [-0.15,0,0.12]);
+// Instrument screens with simplified instrument graphics
+function screenTexture(kind) {
+  const c = document.createElement('canvas'); c.width=512; c.height=320;
+  const g = c.getContext('2d'); g.fillStyle='#071a1b'; g.fillRect(0,0,512,320);
+  g.strokeStyle='#20a9a1'; g.lineWidth=2; g.fillStyle='#8ff5d0'; g.font='bold 20px monospace';
+  if (kind === 'PFD') {
+    g.fillStyle='#1b5680'; g.fillRect(0,0,512,160); g.fillStyle='#775d38'; g.fillRect(0,160,512,160);
+    g.strokeStyle='#ffffff'; g.beginPath(); g.moveTo(170,160); g.lineTo(342,160); g.stroke();
+    g.strokeStyle='#7be8cd'; g.strokeRect(205,125,102,70); g.fillStyle='#ffffff'; g.fillText('SPD',20,28); g.fillText('ALT',425,28); g.fillText('HDG',220,292);
+    g.fillStyle='#8ff5d0'; g.fillText('320',24,80); g.fillText('5000',425,80);
+  } else if (kind === 'ND') {
+    g.strokeStyle='#2d9e8c'; g.beginPath(); g.arc(256,160,118,0,Math.PI*2); g.stroke(); g.beginPath(); g.moveTo(256,30); g.lineTo(256,290); g.moveTo(126,160); g.lineTo(386,160); g.stroke();
+    g.fillStyle='#e8d76c'; g.fillText('TRK  270',20,28); g.fillStyle='#8ff5d0'; g.fillText('WPT',225,150);
+  } else {
+    g.fillStyle='#ffbe56'; g.fillText(kind,20,32); g.fillStyle='#8ff5d0'; g.font='16px monospace'; g.fillText('SYSTEM STATUS',20,80); g.fillText('HYD   NORMAL',20,125); g.fillText('ELEC  NORMAL',20,165); g.fillText('FUEL  CHECK',20,205);
+  }
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace=THREE.SRGBColorSpace; return tex;
+}
+const screenKinds=['PFD','ND','ECAM','ECAM'];
+screenKinds.forEach((kind,i)=>{
+  const x=[-1.52,-0.52,0.52,1.52][i];
+  box(cockpit, kind+' bezel', [0.9,0.61,0.1], [x,1.48,-0.69], edge, [-0.16,0,0]);
+  const mesh=box(cockpit, kind+' display', [0.79,0.5,0.025], [x,1.48,-0.755], mat(0xffffff,0.5,0), [-0.16,0,0]);
+  mesh.material = new THREE.MeshBasicMaterial({map:screenTexture(kind)});
+});
+// FCU row
+box(cockpit, 'FCU body', [3.3,0.25,0.35], [0,1.94,0.48], panelMat, [-0.08,0,0]);
+for(let i=0;i<7;i++){
+  box(cockpit,'FCU key '+i,[0.23,0.07,0.08],[-1.25+i*0.42,1.96,0.25],buttonMat);
+}
+for(let i=0;i<4;i++){
+  const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,0.09,20), mat(0x9da8ad));
+  knob.rotation.x=Math.PI/2; knob.position.set(-0.45+i*0.6,1.95,0.22); cockpit.add(knob);
+}
+// Pedestal and thrust levers
+box(cockpit, 'pedestal base', [1.4,0.22,2.0], [0,0.85,1.15], shell, [-0.12,0,0]);
+box(cockpit, 'pedestal top', [1.25,0.12,1.6], [0,1.0,1.12], panelMat, [-0.12,0,0]);
+for(let i=0;i<2;i++){
+  box(cockpit,'thrust lever '+i,[0.13,0.42,0.13],[-0.18+i*0.36,1.25,1.0],mat(0xadb8be),[-0.15,0,0]);
+}
+box(cockpit, 'captain sidestick base', [0.48,0.25,0.48], [-1.65,0.92,1.35], edge);
+box(cockpit, 'captain sidestick', [0.1,0.65,0.1], [-1.65,1.32,1.35], buttonMat, [0.08,0,0]);
+const stickHead = new THREE.Mesh(new THREE.SphereGeometry(0.16,16,12), mat(0x171c20));
+stickHead.position.set(-1.65,1.66,1.35); cockpit.add(stickHead);
+// Overhead panel above the camera
+box(cockpit, 'overhead shell', [3.0,0.22,1.35], [0,3.65,0.1], shell, [0.24,0,0]);
+box(cockpit, 'overhead face', [2.8,0.07,1.18], [0,3.53,0.08], panelMat, [0.24,0,0]);
+for(let i=0;i<5;i++) for(let j=0;j<3;j++){
+  box(cockpit,'overhead switch '+i+' '+j,[0.11,0.07,0.11],[-0.95+i*0.47,3.56, -0.3+j*0.32],buttonMat,[0.24,0,0]);
+}
+// Soft floor lights
+const fill = new THREE.PointLight(0x7795a8, 1.2, 12); fill.position.set(0,3,3); cockpit.add(fill);
+
+// Simple flight-state model: intentionally illustrative, not certified or procedure-accurate.
+const state={power:false, engines:false, ap:false, gear:true, throttle:0, pitch:0, roll:0, speed:0, altitude:0, heading:270, running:false};
+const el=id=>document.getElementById(id);
+function toggle(id,key,labelOn,labelOff){
+  const b=el(id); b.addEventListener('click',()=>{state[key]=!state[key]; b.setAttribute('aria-pressed',String(state[key])); b.textContent=state[key]?labelOn:labelOff; updateStatus();});
+}
+toggle('power','power','BAT 1 + 2 ON','BAT 1 + 2');
+toggle('engines','engines','ENG RUNNING','ENG START');
+toggle('ap','ap','AUTOPILOT ON','AUTOPILOT');
+toggle('gear','gear','GEAR UP','GEAR DOWN');
+[['throttle','throttle','%'],['pitch','pitch','°'],['roll','roll','°']].forEach(([id,key,unit])=>{
+  el(id).addEventListener('input',e=>{state[key]=Number(e.target.value);el(id+'Val').textContent=state[key]+unit;});
+});
+function updateStatus(){el('simstate').textContent=state.engines?'RUNNING':state.power?'POWERED':'PAUSED';}
+let pointerDown=false,lastX=0,lastY=0,yaw=0,lookPitch=0;
+canvas.addEventListener('pointerdown',e=>{pointerDown=true;lastX=e.clientX;lastY=e.clientY;canvas.setPointerCapture(e.pointerId);});
+canvas.addEventListener('pointerup',()=>pointerDown=false);
+canvas.addEventListener('pointercancel',()=>pointerDown=false);
+canvas.addEventListener('pointermove',e=>{if(!pointerDown)return; yaw-=(e.clientX-lastX)*0.004;lookPitch=Math.max(-0.45,Math.min(0.45,lookPitch+(e.clientY-lastY)*0.003));lastX=e.clientX;lastY=e.clientY;});
+window.addEventListener('keydown',e=>{
+ if(e.key==='ArrowUp') el('pitch').value=Math.min(20,Number(el('pitch').value)+1);
+ if(e.key==='ArrowDown') el('pitch').value=Math.max(-20,Number(el('pitch').value)-1);
+ if(e.key==='ArrowLeft') el('roll').value=Math.max(-35,Number(el('roll').value)-2);
+ if(e.key==='ArrowRight') el('roll').value=Math.min(35,Number(el('roll').value)+2);
+ ['pitch','roll'].forEach(id=>el(id).dispatchEvent(new Event('input')));
+});
+const clock=new THREE.Clock();
+function animate(){
+  const dt=Math.min(clock.getDelta(),0.05);
+  if(state.power&&state.engines){
+    state.speed += ((state.throttle*1.9)-state.speed)*dt*0.09;
+    state.altitude += (state.pitch*1.8 + (state.throttle>45?1.5:0) - (state.gear?1.2:0))*dt;
+    state.altitude=Math.max(0,state.altitude);
+    if(state.ap){state.roll*=0.98;state.pitch*=0.98;}
+  } else {state.speed*=0.99;}
+  // Small visual attitude cue; cockpit remains the primary view.
+  cockpit.rotation.z=THREE.MathUtils.damp(cockpit.rotation.z,-THREE.MathUtils.degToRad(state.roll)*0.12,2,dt);
+  cockpit.rotation.x=THREE.MathUtils.damp(cockpit.rotation.x,THREE.MathUtils.degToRad(state.pitch)*0.08,2,dt);
+  const lookDir=new THREE.Vector3(Math.sin(yaw),lookPitch,-Math.cos(yaw));
+  camera.lookAt(camera.position.clone().add(lookDir));
+  renderer.render(scene,camera);
+  requestAnimationFrame(animate);
+}
+animate();
+window.addEventListener('resize',()=>{
+ renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.6));
+ renderer.setSize(window.innerWidth,window.innerHeight);
+ camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix();
+});
+</script>
+</body>
+</html>
